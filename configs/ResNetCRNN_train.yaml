@@ -1,0 +1,65 @@
+# ResNetCRNN Training Configuration
+model:
+  name: "ResNetCRNN"
+  cnn_encoder: "resnet50"
+  rnn_decoder: "lstm"
+  fc_hidden1: 1024
+  fc_hidden2: 768
+  embed_dim: 512
+  dropout: 0.3  # 修复：从0.0增加到0.3，增加正则化
+  hidden_layers: 3
+  hidden_nodes: 512
+  fc_dim: 256
+
+training:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.0001  # 修复：从0.001降低到0.0001，更适合微调预训练模型
+  weight_decay: 1e-4
+  optimizer: "adam"
+  scheduler: "step"
+  step_size: 20
+  gamma: 0.1
+  # amp: true               # 是否启用混合精度训练
+  # grad_accum_steps: 1     # 梯度累积步数
+  # seed: 42                # 随机种子，保证可复现
+  # early_stopping:
+  #   enabled: true         # 启用早停
+  #   patience: 10          # 忍耐轮数
+  #   min_delta: 0.0        # 最小改进幅度
+  # monitor: "val_loss"     # 监控指标: val_loss 或 val_acc
+  
+data:
+  dataset: "UCF101"
+  data_path: "/data2/lpq/video-classification/jpegs_256_processed"
+  action_name_path: "configs/data/UCF101actions.pkl"
+  num_frames: 16
+  frame_size: 224
+  num_classes: 101
+  train_split: 0.8
+  val_split: 0.2
+  # num_workers: 4         # DataLoader worker 数量
+  # pin_memory: true       # CUDA下建议开启
+  # persistent_workers: true # 长生命周期worker
+  
+augmentation:
+  horizontal_flip: true
+  random_crop: true
+  color_jitter: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+checkpoint:
+  save_dir: "results/ResNetCRNN/result"
+  save_freq: 5
+  resume: null  # 默认值：None表示创建新目录开始训练，数字表示从指定epoch继续训练
+  pretrained: true
+  # best_metric: "val_loss"  # 保存best模型的指标(val_loss/val_acc)
+  # save_predictions: true    # 是否保存预测结果
+  # eval_output_dir: "results/ResNetCRNN/ResNetCRNN_ckpt/eval"  # 评估结果输出目录
+
+logging:
+  log_dir: "results/ResNetCRNN/result/outputs/logs"
+  tensorboard: true
+  wandb: false

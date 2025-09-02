@@ -1,0 +1,68 @@
+# SwinTransformer-RNN Training Configuration
+model:
+  name: "swintransformer-RNN"
+  swin_transformer:
+    embed_dim: 96
+    depths: [2, 2, 6, 2]
+    num_heads: [3, 6, 12, 24]
+    window_size: 7
+    patch_size: 4
+  rnn_decoder: "lstm"
+  hidden_size: 512
+  num_layers: 2
+  dropout: 0.5
+
+training:
+  epochs: 50
+  batch_size: 32  # 增加批次大小以避免分布式训练中的批次大小问题
+  learning_rate: 0.0001  # 较小的学习率
+  weight_decay: 1e-4
+  optimizer: "adamw"  # 使用AdamW优化器
+  scheduler: "cosine"  # 使用余弦退火调度器
+  warmup_epochs: 5
+  # amp: true
+  # grad_accum_steps: 1
+  # seed: 42
+  # early_stopping:
+  #   enabled: true
+  #   patience: 10
+  #   min_delta: 0.0
+  # monitor: "val_loss"
+  
+data:
+  dataset: "UCF101"
+  data_path: "/data2/lpq/video-classification/jpegs_256_processed/"
+  action_name_path: "configs/data/UCF101actions.pkl"
+  # action_name_path: "data/UCF101actions.pkl"
+  num_frames: 16
+  frame_size: 224
+  num_classes: 101
+  train_split: 0.8
+  val_split: 0.2
+  # num_workers: 4
+  # pin_memory: true
+  # persistent_workers: true
+  
+augmentation:
+  horizontal_flip: true
+  random_crop: true
+  color_jitter: true
+  mixup: true
+  cutmix: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+checkpoint:
+  save_dir: "results/swintransformer-RNN/result"
+  save_freq: 5
+  resume: null  # 默认值：None表示创建新目录开始训练，数字表示从指定epoch继续训练
+  pretrained: true
+  # best_metric: "val_loss"
+  # save_predictions: true
+  # eval_output_dir: "results/swintransformer-RNN/SwinCRNN_ckpt/eval"
+
+logging:
+  log_dir: "results/swintransformer-RNN/result/outputs/logs"
+  tensorboard: true
+  wandb: false
