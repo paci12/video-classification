@@ -567,16 +567,7 @@ def train_model(model_name, config, args):
             best_val_loss = val_loss
             # 从配置文件读取基础保存目录，然后拼接权重子目录
             base_dir = checkpoint_config.get('save_dir', f'results/{model_name}')
-            if model_name == 'swintransformer-RNN':
-                ckpt_dir = os.path.join(base_dir, 'SwinCRNN_ckpt')
-            elif model_name == 'ResNetCRNN':
-                ckpt_dir = os.path.join(base_dir, 'ResNetCRNN_ckpt')
-            elif model_name == 'CRNN':
-                ckpt_dir = os.path.join(base_dir, 'CRNN_ckpt')
-            elif model_name == 'Conv3D':
-                ckpt_dir = os.path.join(base_dir, 'Conv3D_ckpt')
-            else:
-                ckpt_dir = os.path.join(base_dir, 'outputs')
+            ckpt_dir = os.path.join(base_dir, 'ckpt') 
             
             save_path = os.path.join(ckpt_dir, 'best_model.pth')
             save_checkpoint(model, optimizer, epoch+1, val_loss, save_path)
@@ -586,16 +577,7 @@ def train_model(model_name, config, args):
         if (epoch + 1) % save_freq == 0:
             # 从配置文件读取基础保存目录，然后拼接权重子目录
             base_dir = checkpoint_config.get('save_dir', f'results/{model_name}')
-            if model_name == 'swintransformer-RNN':
-                ckpt_dir = os.path.join(base_dir, 'SwinCRNN_ckpt')
-            elif model_name == 'ResNetCRNN':
-                ckpt_dir = os.path.join(base_dir, 'ResNetCRNN_ckpt')
-            elif model_name == 'CRNN':
-                ckpt_dir = os.path.join(base_dir, 'CRNN_ckpt')
-            elif model_name == 'Conv3D':
-                ckpt_dir = os.path.join(base_dir, 'Conv3D_ckpt')
-            else:
-                ckpt_dir = os.path.join(base_dir, 'outputs')
+            ckpt_dir = os.path.join(base_dir, 'ckpt')
             
             save_path = os.path.join(ckpt_dir, f'checkpoint_epoch_{epoch+1}.pth')
             save_checkpoint(model, optimizer, epoch+1, val_loss, save_path)
@@ -751,7 +733,7 @@ def main():
             if os.path.exists(result_dir):
                 print(f"✅ 使用现有目录: {result_dir}")
                 # 检查checkpoint文件是否存在
-                ckpt_dir = os.path.join(result_dir, f"{args.model}_ckpt")
+                ckpt_dir = os.path.join(result_dir, f"ckpt")
                 if os.path.exists(ckpt_dir):
                     checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.startswith('checkpoint_epoch_')]
                     print(f"📁 发现checkpoint文件: {checkpoint_files}")
@@ -800,7 +782,7 @@ def main():
             print(f"✅ 创建新的result目录: {result_dir}")
         
         # 创建必要的子目录（如果不存在）
-        ckpt_dir = os.path.join(result_dir, f"{args.model}_ckpt")
+        ckpt_dir = os.path.join(result_dir, f"ckpt")
         outputs_dir = os.path.join(result_dir, "outputs")
         check_predictions_dir = os.path.join(result_dir, "check_predictions")
         

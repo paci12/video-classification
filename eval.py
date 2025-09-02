@@ -48,11 +48,11 @@ def generate_predictions(model_name, epoch=None, save_predictions=False):
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-        ckpt_dir = config.get('checkpoint', {}).get('save_dir', f"results/{model_name}/result")
+        ckpt_dir = config.get('checkpoint', {}).get('save_dir', f"results/{model_name}/result/ckpt")
         print(f"从配置文件读取checkpoint路径: {ckpt_dir}")
     else:
         # 如果配置文件不存在，使用默认路径
-        ckpt_dir = f"results/{model_name}/result"
+        ckpt_dir = f"results/{model_name}/result/ckpt"
         print(f"配置文件不存在，使用默认路径: {ckpt_dir}")
     
     if epoch is not None:
@@ -149,7 +149,7 @@ def load_predictions(model_name, epoch=None, save_predictions=False):
     """加载指定模型的预测结果"""
     if epoch is not None:
         # 如果指定了epoch，尝试加载对应epoch的预测结果
-        pred_file = f"results/{model_name}/result/check_predictions/{model_name}_epoch_{epoch}_videos_prediction.pkl"
+        pred_file = f"results/{model_name}/result/check_predictions/{model_name}_epoch_{epoch}_epoch_latest_videos_prediction.pkl"
         if os.path.exists(pred_file):
             with open(pred_file, 'rb') as f:
                 predictions_df = pickle.load(f)
@@ -159,7 +159,7 @@ def load_predictions(model_name, epoch=None, save_predictions=False):
             print(f"Epoch {epoch} 的预测结果文件不存在: {pred_file}")
     
     # 如果没有指定epoch或指定epoch的文件不存在，尝试加载默认的预测结果
-    pred_file = f"results/{model_name}/result/check_predictions/{model_name}_videos_prediction.pkl"
+    pred_file = f"results/{model_name}/result/check_predictions/{model_name}_epoch_latest_videos_prediction.pkl"
     if os.path.exists(pred_file):
         with open(pred_file, 'rb') as f:
             predictions_df = pickle.load(f)
