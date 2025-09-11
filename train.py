@@ -268,22 +268,48 @@ def get_data_loader(model_name, config, split='train'):
     # 数据变换
     if model_name == 'Conv3D':
         # 3D CNN使用灰度图像
-        transform = transforms.Compose([
+        transform_list = [
             transforms.Resize([data_config.get('frame_size', 112), data_config.get('frame_size', 112)]),
+        ]
+        
+        # 添加数据增强（仅在训练时）
+        if split == 'train':
+            if augmentation_config.get('horizontal_flip', False):
+                transform_list.append(transforms.RandomHorizontalFlip())
+            if augmentation_config.get('random_crop', False):
+                transform_list.append(transforms.RandomCrop(data_config.get('frame_size', 112)))
+        
+        transform_list.extend([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5], std=[0.5])
         ])
+        
+        transform = transforms.Compose(transform_list)
         DatasetClass = Dataset_3DCNN
     else:
         # 其他模型使用彩色图像
-        transform = transforms.Compose([
+        transform_list = [
             transforms.Resize([data_config.get('frame_size', 224), data_config.get('frame_size', 224)]),
+        ]
+        
+        # 添加数据增强（仅在训练时）
+        if split == 'train':
+            if augmentation_config.get('horizontal_flip', False):
+                transform_list.append(transforms.RandomHorizontalFlip())
+            if augmentation_config.get('random_crop', False):
+                transform_list.append(transforms.RandomCrop(data_config.get('frame_size', 224)))
+            if augmentation_config.get('color_jitter', False):
+                transform_list.append(transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1))
+        
+        transform_list.extend([
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=augmentation_config.get('normalize', {}).get('mean', [0.485, 0.456, 0.406]),
                 std=augmentation_config.get('normalize', {}).get('std', [0.229, 0.224, 0.225])
             )
         ])
+        
+        transform = transforms.Compose(transform_list)
         if model_name == 'ResNetCRNN_varylength':
             DatasetClass = Dataset_CRNN_varlen
         else:
@@ -346,10 +372,14 @@ def get_data_loader(model_name, config, split='train'):
         X = np.array(all_video_folders)
         y = np.array(all_y_list)
         
+        # 使用配置文件中的分割比例
+        val_split = data_config.get('val_split', 0.2)
+        train_split = data_config.get('train_split', 0.8)
+        
         if split == 'train':
-            X_data, _, y_data, _ = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+            X_data, _, y_data, _ = train_test_split(X, y, test_size=val_split, random_state=42, stratify=y)
         else:  # val
-            _, X_data, _, y_data = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+            _, X_data, _, y_data = train_test_split(X, y, test_size=val_split, random_state=42, stratify=y)
         
         # 创建数据集
         dataset = DatasetClass(data_path, X_data, y_data, frames, transform=transform)

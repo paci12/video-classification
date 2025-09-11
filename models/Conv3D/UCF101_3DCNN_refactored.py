@@ -30,6 +30,7 @@ from common.training_utils import (
     train_epoch, validate_epoch, save_checkpoint, load_checkpoint,
     get_optimizer, get_scheduler, save_predictions, count_parameters
 )
+from config_loader import ConfigLoader
 
 # 配置参数
 class Config:
@@ -48,8 +49,10 @@ class Config:
     learning_rate = 1e-4
     log_interval = 10
     
-    # 帧选择
-    begin_frame, end_frame, skip_frame = 1, 29, 1
+    # 帧选择 - 从配置文件读取
+    begin_frame = 1
+    end_frame = 17  # 默认16帧，end_frame = num_frames + 1
+    skip_frame = 1
 
 class Conv3DModel(nn.Module):
     """3D CNN模型 - 使用公共组件"""
@@ -294,39 +297,51 @@ def main():
     
     args = parser.parse_args()
     
-    # 加载配置
+    # 使用ConfigLoader加载配置
     if args.config and os.path.exists(args.config):
-        # 使用YAML配置文件
-        import yaml
-        with open(args.config, 'r') as f:
-            config_dict = yaml.safe_load(f)
-        
-        # 创建配置对象
-        config = Config()
-        
-        # 更新配置
-        if 'training' in config_dict:
-            training = config_dict['training']
-            if 'epochs' in training:
-                config.epochs = training['epochs']
-            if 'batch_size' in training:
-                config.batch_size = training['batch_size']
-            if 'learning_rate' in training:
-                config.learning_rate = training['learning_rate']
-        
-        if 'data' in config_dict:
-            data = config_dict['data']
-            if 'data_path' in data:
-                config.data_path = data['data_path']
-            if 'action_name_path' in data:
-                config.action_name_path = data['action_name_path']
-        
-        if 'checkpoint' in config_dict:
-            checkpoint = config_dict['checkpoint']
-            if 'save_dir' in checkpoint:
-                config.save_model_path = checkpoint['save_dir']
+        config_loader = ConfigLoader(args.config)
     else:
-        config = Config()
+        # 使用默认配置文件
+        default_config_path = "configs/Conv3D_train.yaml"
+        if os.path.exists(default_config_path):
+            config_loader = ConfigLoader(default_config_path)
+        else:
+            print(f"Warning: Config file {default_config_path} not found, using default config")
+            config_loader = ConfigLoader()
+    
+    # 创建配置对象
+    config = Config()
+    
+    # 从ConfigLoader更新配置
+    training_config = config_loader.get_training_config()
+    data_config = config_loader.get_data_config()
+    checkpoint_config = config_loader.get_checkpoint_config()
+    
+    # 更新训练配置
+    if 'epochs' in training_config:
+        config.epochs = training_config['epochs']
+    if 'batch_size' in training_config:
+        config.batch_size = training_config['batch_size']
+    if 'learning_rate' in training_config:
+        config.learning_rate = training_config['learning_rate']
+    
+    # 更新数据配置
+    if 'data_path' in data_config:
+        config.data_path = data_config['data_path']
+    if 'action_name_path' in data_config:
+        config.action_name_path = data_config['action_name_path']
+    if 'num_frames' in data_config:
+        config.end_frame = data_config['num_frames'] + 1  # end_frame = num_frames + 1
+    if 'begin_frame' in data_config:
+        config.begin_frame = data_config['begin_frame']
+    if 'end_frame' in data_config:
+        config.end_frame = data_config['end_frame']
+    if 'skip_frame' in data_config:
+        config.skip_frame = data_config['skip_frame']
+    
+    # 更新检查点配置
+    if 'save_dir' in checkpoint_config:
+        config.save_model_path = checkpoint_config['save_dir']
     
     # 命令行参数覆盖
     if args.epochs is not None:
