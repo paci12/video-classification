@@ -304,3 +304,95 @@ class SwinTransformerEncoder(nn.Module):
         # 交换时间和样本维度
         cnn_embed_seq = torch.stack(cnn_embed_seq, dim=0).transpose_(0, 1)
         return cnn_embed_seq
+
+
+class OffsetHead(nn.Module):
+    def __init__(self, in_ch, num_windows):
+        super().__init__()
+        self.dw = nn.Conv2d(in_ch, in_ch, 3, padding=1, groups=in_ch)
+        self.pw = nn.Conv2d(in_ch, 2 * num_windows, 1)  # 每个window预测 Δx, Δy
+
+    def forward(self, x):
+        o = self.pw(F.relu(self.dw(x)))  # [B, 2W, H', W']
+        return o.tanh()  # 归一化到 [-1,1]，再按特征尺寸缩放
+
+
+class ClusterSwinEncoder(nn.Module):
+    def __init__(self, backbone='swin_tiny_patch4_window7_224', embed_dim=512, k_tokens=8):
+        super().__init__()
+        self.backbone = create_model(backbone, pretrained=True, features_only=True, out_indices=(1, 2, 3))
+        ch2, ch3, ch4 = self.backbone.feature_info.channels()
+        self.proj2 = nn.Conv2d(ch2, embed_dim, 1)
+        self.proj3 = nn.Conv2d(ch3, embed_dim, 1)
+        self.proj4 = nn.Conv2d(ch4, embed_dim, 1)
+        self.offset2 = OffsetHead(ch2, num_windows=((14 * 14) // 49))  # 示例
+        self.offset3 = OffsetHead(ch3, num_windows=((7 * 7) // 49))
+        self.offset4 = OffsetHead(ch4, num_windows=((7 * 7) // 49))
+        self.k_tokens = k_tokens
+        self.token_pool = nn.AdaptiveAvgPool2d(1)
+
+    def _residual_cascade(self, f2, f3, f4):
+        f3u = F.interpolate(self.proj3(f3), size=f2.shape[-2:], mode='bilinear', align_corners=False)
+        f4u = F.interpolate(self.proj4(f4), size=f2.shape[-2:], mode='bilinear', align_corners=False)
+        f2p = self.proj2(f2)
+        return f4u + f3u + f2p  # [B, embed, H2, W2]
+
+    def _cluster_tokens(self, fmap):
+        B, C, H, W = fmap.shape
+        heat = fmap.abs().mean(1)  # [B, H, W]
+        k = min(self.k_tokens, H * W)
+        topk = torch.topk(heat.view(B, -1), k, dim=1).indices  # [B, k]
+        tokens = []
+        for b in range(B):
+            idxs = topk[b]
+            y = (idxs // W).long()
+            x = (idxs % W).long()
+            tokens.append(fmap[b, :, y, x].transpose(0, 1))  # [k, C]
+        return torch.stack(tokens, 0)  # [B, k, C]
+
+    def forward(self, x):
+        B, T, C, H, W = x.shape
+        feats, tokens = [], []
+        for t in range(T):
+            f2, f3, f4 = self.backbone(x[:, t])  # timm: 输入 [B, 3, H, W]
+            fmap = self._residual_cascade(f2, f3, f4)  # [B, embed, h, w]
+            feats.append(self.token_pool(fmap).flatten(1))  # [B, embed]
+            tokens.append(self._cluster_tokens(fmap))  # [B, k, embed]
+        g = torch.stack(feats, dim=1)  # [B, T, embed]
+        c = torch.stack(tokens, dim=1)  # [B, T, k, embed]
+        return g, c  # 返回时空特征和团簇tokens
+
+
+class TCG_LSTM(nn.Module):
+    def __init__(self, embed_dim=512, hidden=512, layers=2, k_tokens=8, down=4, num_classes=4, drop=0.1):
+        super().__init__()
+        self.down = down
+        self.lstm_short = nn.LSTM(embed_dim + embed_dim, hidden, layers, batch_first=True, dropout=drop, bidirectional=True)
+        self.lstm_long = nn.LSTM(embed_dim, hidden // 2, layers, batch_first=True, dropout=drop, bidirectional=True)
+        self.gate = nn.Sequential(nn.Linear(hidden * 2 + hidden, hidden * 2), nn.Sigmoid())  # gate short by long
+        self.fc = nn.Sequential(
+            nn.Linear(hidden * 2, 256), 
+            nn.ReLU(True), 
+            nn.Dropout(drop), 
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, g, c):
+        # g: [B, T, E] (全局特征); c: [B, T, K, E] (团簇tokens)
+        c_mean = c.mean(2)  # [B, T, E] 作为团簇摘要
+        short_in = torch.cat([g, c_mean], dim=-1)  # [B, T, 2E]
+        long_in = g[:, ::self.down, :]  # [B, T/down, E]
+        
+        # 短程和长程LSTM
+        h_s, _ = self.lstm_short(short_in)  # [B, T, 2H]
+        h_l, _ = self.lstm_long(long_in)  # [B, T/down, H]
+        
+        # 上采样长程并对齐时间
+        h_l_up = F.interpolate(h_l.transpose(1, 2), size=h_s.size(1), mode='linear', align_corners=False).transpose(1, 2)
+        gate = self.gate(torch.cat([h_s, h_l_up], dim=-1))  # [B, T, 2H]
+        h = gate * h_s + (1 - gate) * h_l_up  # 融合
+
+        # 注意力池化（可选：对 T 做权重）
+        alpha = torch.softmax(torch.mean(h, dim=-1), dim=1).unsqueeze(-1)  # [B, T, 1]
+        h_clip = (h * alpha).sum(1)  # [B, 2H]
+        return self.fc(h_clip)  # [B, num_classes]

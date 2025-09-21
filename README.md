@@ -197,10 +197,31 @@ python train.py --model CRNN       --config configs/CRNN_train.yaml
 python train.py --model Conv3D     --config configs/Conv3D_train.yaml
 python train.py --model swintransformer-RNN --config configs/swintransformer-RNN_train.yaml
 
+# 直接运行 ClusterSwin + TCG-LSTM 脚本
+python models/clusterSwin_TCGlstm/clusterSwin_TCGlstm.py \
+  --config configs/clusterSwin_TCGlstm.yaml \
+  --batch_size 32 \
+  --epochs 50 \
+  --lr 1e-4
+
 # 可选参数覆盖（会覆盖配置文件中的设置）
 python train.py --model ResNetCRNN --config configs/ResNetCRNN_train.yaml --batch_size 8
 python train.py --model ResNetCRNN --config configs/ResNetCRNN_train.yaml --epochs 100
 python train.py --model ResNetCRNN --config configs/ResNetCRNN_train.yaml --lr 0.0001
+```
+
+### ClusterSwin + TCG-LSTM 脚本可用覆盖项
+支持以下覆盖项（仅对当前实现支持的字段生效）：
+
+```bash
+--epochs <int>            # 训练轮数
+--batch_size <int>        # 批次大小
+--lr <float>              # 学习率
+--frame_size <int>        # 帧尺寸（如 224）
+--num_classes <int>       # 类别数量
+--data_path <str>         # 预处理帧根目录
+--action_name_path <str>  # 类别文件路径（pkl）
+--save_dir <str>          # checkpoint 保存目录
 ```
 
 ### Resume训练（继续训练）

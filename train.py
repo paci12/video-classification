@@ -246,6 +246,50 @@ def create_model(model_name, config):
         
         return SwinTransformerRNNModel(swin_encoder, rnn_decoder)
     
+    elif model_name == 'clusterSwin_TCGlstm':
+        # 使用 ClusterSwin + TCG-LSTM（聚类token + 时序门控LSTM）
+        config_dict = config.config
+        # 延迟导入，避免对其他模型产生不必要依赖
+        from utils.common.model_components import ClusterSwinEncoder, TCG_LSTM
+
+        # 从配置读取参数（提供合理默认值）
+        model_cfg = config_dict.get('model', {})
+        cluster_swin_cfg = model_cfg.get('clusterSwin', {})
+        embed_dim = int(cluster_swin_cfg.get('embed_dim', 512))
+        rnn_hidden_size = int(model_cfg.get('hidden_size', 512))
+        rnn_num_layers = int(model_cfg.get('num_layers', 3))
+        rnn_dropout = float(model_cfg.get('dropout', 0.0))
+
+        data_cfg = config_dict.get('data', {})
+        num_classes = int(data_cfg.get('num_classes', 101))
+
+        # 创建编码器与解码器
+        encoder = ClusterSwinEncoder(
+            backbone='swin_tiny_patch4_window7_224',
+            embed_dim=embed_dim,
+            k_tokens=8
+        )
+        decoder = TCG_LSTM(
+            embed_dim=embed_dim,
+            hidden=rnn_hidden_size,
+            layers=rnn_num_layers,
+            k_tokens=8,
+            down=4,
+            num_classes=num_classes,
+            drop=rnn_dropout
+        )
+
+        class SwinTCGModel(nn.Module):
+            def __init__(self, encoder_module, decoder_module):
+                super(SwinTCGModel, self).__init__()
+                self.encoder = encoder_module
+                self.decoder = decoder_module
+
+            def forward(self, x):
+                return self.decoder(self.encoder(x))
+
+        return SwinTCGModel(encoder, decoder)
+    
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
@@ -312,6 +356,10 @@ def get_data_loader(model_name, config, split='train'):
         transform = transforms.Compose(transform_list)
         if model_name == 'ResNetCRNN_varylength':
             DatasetClass = Dataset_CRNN_varlen
+        elif model_name == 'clusterSwin_TCGlstm':
+            # 使用专用的SwinCRNN数据集（彩色帧 + 选帧）
+            from utils.common.data_loaders import Dataset_SwinCRNN
+            DatasetClass = Dataset_SwinCRNN
         else:
             DatasetClass = Dataset_CRNN
     
@@ -677,7 +725,7 @@ def train_model(model_name, config, args):
 def main():
     parser = argparse.ArgumentParser(description='Video Classification Training')
     parser.add_argument('--model', type=str, required=True, 
-                       choices=['Conv3D', 'CRNN', 'ResNetCRNN', 'ResNetCRNN_varylength', 'swintransformer-RNN'],
+                       choices=['Conv3D', 'CRNN', 'ResNetCRNN', 'ResNetCRNN_varylength', 'swintransformer-RNN', 'clusterSwin_TCGlstm'],
                        help='Model type to train')
     parser.add_argument('--config', type=str, default=None,
                        help='Path to config file (optional, will use default config if not provided)')
