@@ -6,6 +6,9 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torch.utils.data as data
 import matplotlib.pyplot as plt
+import logging
+import sys
+from datetime import datetime
 from utils.common.model_components import SwinTransformerEncoder, DecoderRNN
 from utils.common.data_loaders import Dataset_SwinCRNN
 from utils.common.label_utils import labels2cat
@@ -22,13 +25,43 @@ import yaml
 # 过滤sklearn的警告
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 
+def setup_logging(log_dir):
+    """设置日志记录"""
+    # 处理相对路径和绝对路径
+    if not os.path.isabs(log_dir):
+        # 如果是相对路径，相对于项目根目录
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        log_dir = os.path.join(project_root, log_dir)
+    
+    # 创建日志目录
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 创建日志文件名（包含时间戳）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"swintransformer_rnn_training_{timestamp}.log")
+    
+    # 配置日志格式
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)  # 同时输出到控制台
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized. Log file: {log_file}")
+    return logger
+
 class Config:
     def __init__(self, config_dict=None):
-        # 默认值
-        self.data_path = "jpegs_256_processed"
-        self.action_name_path = 'configs/data/UCF101actions.pkl'
-        self.save_model_path = "results/swintransformer_rnn/outputs"
-        self.epochs = 120
+        # 设置默认值（这些值会在配置文件加载后被覆盖）
+        self.data_path = None
+        self.action_name_path = None
+        self.save_model_path = None
+        self.log_dir = None
+        self.epochs = 50
         self.batch_size = 280
         self.learning_rate = 4e-3
         self.res_size = 224
@@ -50,40 +83,49 @@ class Config:
         self.end_frame = 28
         self.skip_frame = 1
         
-        # 如果提供了配置文件，则覆盖默认值
+        # 如果提供了配置文件，则加载配置
         if config_dict:
             self._update_from_config(config_dict)
+        else:
+            raise ValueError("Configuration dictionary is required. Please provide a valid config file.")
     
     def _update_from_config(self, config_dict):
         """从配置文件更新配置"""
+        # 数据配置
         if 'data' in config_dict:
             data_cfg = config_dict['data']
-            if 'data_path' in data_cfg:
-                self.data_path = data_cfg['data_path']
-            if 'action_name_path' in data_cfg:
-                self.action_name_path = data_cfg['action_name_path']
-            if 'num_classes' in data_cfg:
-                self.k = int(data_cfg['num_classes'])
-            if 'frame_size' in data_cfg:
-                self.res_size = int(data_cfg['frame_size'])
+            self.data_path = data_cfg.get('data_path', self.data_path)
+            self.action_name_path = data_cfg.get('action_name_path', self.action_name_path)
+            self.k = int(data_cfg.get('num_classes', self.k))
+            self.res_size = int(data_cfg.get('frame_size', self.res_size))
         
+        # 训练配置
         if 'training' in config_dict:
             train_cfg = config_dict['training']
-            if 'epochs' in train_cfg:
-                self.epochs = int(train_cfg['epochs'])
-            if 'batch_size' in train_cfg:
-                self.batch_size = int(train_cfg['batch_size'])
-            if 'learning_rate' in train_cfg:
-                self.learning_rate = float(train_cfg['learning_rate'])
+            self.epochs = int(train_cfg.get('epochs', self.epochs))
+            self.batch_size = int(train_cfg.get('batch_size', self.batch_size))
+            self.learning_rate = float(train_cfg.get('learning_rate', self.learning_rate))
         
+        # 检查点配置
         if 'checkpoint' in config_dict:
             checkpoint_cfg = config_dict['checkpoint']
-            if 'save_dir' in checkpoint_cfg:
-                self.save_model_path = str(checkpoint_cfg['save_dir'])
-            # 读取pretrained参数
-            if 'pretrained' in checkpoint_cfg:
-                self.use_pretrained = bool(checkpoint_cfg['pretrained'])
-                print(f"SwinTransformer: Using pretrained weights: {self.use_pretrained}")
+            self.save_model_path = str(checkpoint_cfg.get('save_dir', self.save_model_path))
+            self.use_pretrained = bool(checkpoint_cfg.get('pretrained', self.use_pretrained))
+        
+        # 日志配置
+        if 'logging' in config_dict:
+            logging_cfg = config_dict['logging']
+            self.log_dir = str(logging_cfg.get('log_dir', self.log_dir))
+        
+        # 验证必要的配置是否存在
+        if self.data_path is None:
+            raise ValueError("data_path is required in configuration")
+        if self.action_name_path is None:
+            raise ValueError("action_name_path is required in configuration")
+        if self.save_model_path is None:
+            raise ValueError("save_dir is required in checkpoint configuration")
+        if self.log_dir is None:
+            raise ValueError("log_dir is required in logging configuration")
 
 def train_epoch(model, device, train_loader, optimizer, epoch, config):
     """训练一个epoch"""
@@ -125,7 +167,7 @@ def train_epoch(model, device, train_loader, optimizer, epoch, config):
 
     return losses, scores
 
-def validate_epoch(model, device, val_loader, epoch, config):
+def validate_epoch(model, device, val_loader, epoch, config, logger=None):
     """验证一个epoch"""
     swin_encoder, rnn_decoder = model
     swin_encoder.eval()
@@ -159,7 +201,10 @@ def validate_epoch(model, device, val_loader, epoch, config):
     else:
         val_score = 1.0 if all_y_pred.item() == all_y.item() else 0.0
 
-    print(f'\nValidation set ({len(all_y)} samples): Average loss: {val_loss:.4f}, Accuracy: {val_score:.2%}')
+    if logger:
+        logger.info(f'\nValidation set ({len(all_y)} samples): Average loss: {val_loss:.4f}, Accuracy: {val_score:.2%}')
+    else:
+        print(f'\nValidation set ({len(all_y)} samples): Average loss: {val_loss:.4f}, Accuracy: {val_score:.2%}')
 
     return val_loss, val_score
 
@@ -238,14 +283,18 @@ def get_data_loaders(config):
 def train_model(config):
     """训练模型的主函数"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
     
     # 创建保存目录
     os.makedirs(config.save_model_path, exist_ok=True)
     
+    # 设置日志记录
+    logger = setup_logging(config.log_dir)
+    
+    logger.info(f"Using device: {device}")
+    
     # 获取数据加载器
     train_loader, val_loader, num_classes = get_data_loaders(config)
-    print(f"Data loaded: {num_classes} classes")
+    logger.info(f"Data loaded: {num_classes} classes")
     
     # 创建模型
     swin_encoder, rnn_decoder = create_model(config)
@@ -254,7 +303,7 @@ def train_model(config):
     
     # 多GPU支持
     if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
+        logger.info(f"Using {torch.cuda.device_count()} GPUs")
         swin_encoder = nn.DataParallel(swin_encoder)
         rnn_decoder = nn.DataParallel(rnn_decoder)
     
@@ -274,7 +323,7 @@ def train_model(config):
         train_losses, train_scores = train_epoch(model, device, train_loader, optimizer, epoch, config)
         
         # 验证
-        val_loss, val_score = validate_epoch(model, device, val_loader, epoch, config)
+        val_loss, val_score = validate_epoch(model, device, val_loader, epoch, config, logger)
         
         # 保存最佳模型
         if val_loss < best_val_loss:
@@ -288,9 +337,9 @@ def train_model(config):
                 'val_score': val_score
             }, os.path.join(config.save_model_path, 'best_model.pth'))
         
-        print(f"Epoch {epoch+1}: Train Loss: {np.mean(train_losses):.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_score:.2%}")
+        logger.info(f"Epoch {epoch+1}: Train Loss: {np.mean(train_losses):.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_score:.2%}")
     
-    print("Training completed!")
+    logger.info("Training completed!")
     return model
 
 if __name__ == '__main__':

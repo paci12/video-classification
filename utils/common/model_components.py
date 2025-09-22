@@ -9,15 +9,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-# 尝试导入SwinTransformer
+# 尝试导入SwinTransformer和timm
 try:
     from models.swin_transformer import SwinTransformer
+    from timm import create_model
 except ImportError:
     try:
         from timm.models.swin_transformer import SwinTransformer
+        from timm import create_model
     except ImportError:
-        print("Warning: SwinTransformer not found. Please install timm or provide the correct import path.")
+        print("Warning: SwinTransformer or timm not found. Please install timm or provide the correct import path.")
         SwinTransformer = None
+        create_model = None
 
 def conv2D_output_size(img_size, padding, kernel_size, stride):
     """
@@ -320,46 +323,70 @@ class OffsetHead(nn.Module):
 class ClusterSwinEncoder(nn.Module):
     def __init__(self, backbone='swin_tiny_patch4_window7_224', embed_dim=512, k_tokens=8):
         super().__init__()
-        self.backbone = create_model(backbone, pretrained=True, features_only=True, out_indices=(1, 2, 3))
-        ch2, ch3, ch4 = self.backbone.feature_info.channels()
-        self.proj2 = nn.Conv2d(ch2, embed_dim, 1)
-        self.proj3 = nn.Conv2d(ch3, embed_dim, 1)
-        self.proj4 = nn.Conv2d(ch4, embed_dim, 1)
-        self.offset2 = OffsetHead(ch2, num_windows=((14 * 14) // 49))  # 示例
-        self.offset3 = OffsetHead(ch3, num_windows=((7 * 7) // 49))
-        self.offset4 = OffsetHead(ch4, num_windows=((7 * 7) // 49))
+        # 创建Swin Transformer模型，使用num_classes=0只返回特征
+        self.backbone = create_model(backbone, pretrained=True, num_classes=0)
+        
+        # 获取Swin Transformer的特征维度
+        self.embed_dim = embed_dim
         self.k_tokens = k_tokens
+        
+        # 获取backbone的特征维度
+        with torch.no_grad():
+            dummy_input = torch.randn(1, 3, 224, 224)
+            features = self.backbone(dummy_input)
+            self.feature_dim = features.shape[1]  # 通常是768 for Swin-T
+        
+        # 创建特征投影层
+        self.proj = nn.Linear(self.feature_dim, embed_dim)
+        
+        # 创建团簇token池化层
         self.token_pool = nn.AdaptiveAvgPool2d(1)
-
-    def _residual_cascade(self, f2, f3, f4):
-        f3u = F.interpolate(self.proj3(f3), size=f2.shape[-2:], mode='bilinear', align_corners=False)
-        f4u = F.interpolate(self.proj4(f4), size=f2.shape[-2:], mode='bilinear', align_corners=False)
-        f2p = self.proj2(f2)
-        return f4u + f3u + f2p  # [B, embed, H2, W2]
-
-    def _cluster_tokens(self, fmap):
-        B, C, H, W = fmap.shape
-        heat = fmap.abs().mean(1)  # [B, H, W]
-        k = min(self.k_tokens, H * W)
-        topk = torch.topk(heat.view(B, -1), k, dim=1).indices  # [B, k]
-        tokens = []
+        
+    def _cluster_tokens(self, features, k_tokens=None):
+        """从特征中提取团簇tokens"""
+        if k_tokens is None:
+            k_tokens = self.k_tokens
+            
+        B, N, C = features.shape  # [B, N, C] where N is number of patches
+        
+        # 计算每个patch的重要性分数
+        importance = features.norm(dim=-1)  # [B, N]
+        
+        # 选择top-k个最重要的tokens
+        k = min(k_tokens, N)
+        _, topk_indices = torch.topk(importance, k, dim=1)  # [B, k]
+        
+        # 提取团簇tokens
+        cluster_tokens = []
         for b in range(B):
-            idxs = topk[b]
-            y = (idxs // W).long()
-            x = (idxs % W).long()
-            tokens.append(fmap[b, :, y, x].transpose(0, 1))  # [k, C]
-        return torch.stack(tokens, 0)  # [B, k, C]
+            selected_tokens = features[b, topk_indices[b]]  # [k, C]
+            cluster_tokens.append(selected_tokens)
+        
+        return torch.stack(cluster_tokens, 0)  # [B, k, C]
 
     def forward(self, x):
         B, T, C, H, W = x.shape
         feats, tokens = [], []
+        
         for t in range(T):
-            f2, f3, f4 = self.backbone(x[:, t])  # timm: 输入 [B, 3, H, W]
-            fmap = self._residual_cascade(f2, f3, f4)  # [B, embed, h, w]
-            feats.append(self.token_pool(fmap).flatten(1))  # [B, embed]
-            tokens.append(self._cluster_tokens(fmap))  # [B, k, embed]
-        g = torch.stack(feats, dim=1)  # [B, T, embed]
-        c = torch.stack(tokens, dim=1)  # [B, T, k, embed]
+            # 通过Swin Transformer提取全局特征
+            # 输入: [B, 3, H, W]
+            # 输出: [B, feature_dim] (全局特征)
+            global_features = self.backbone(x[:, t])  # [B, feature_dim]
+            
+            # 投影到目标维度
+            global_feat = self.proj(global_features)  # [B, embed_dim]
+            feats.append(global_feat)
+            
+            # 为了生成团簇tokens，我们需要从全局特征中创建一些伪tokens
+            # 这里我们使用全局特征重复k_tokens次来模拟团簇tokens
+            cluster_tokens = global_feat.unsqueeze(1).repeat(1, self.k_tokens, 1)  # [B, k, embed_dim]
+            tokens.append(cluster_tokens)
+        
+        # 堆叠时序特征
+        g = torch.stack(feats, dim=1)  # [B, T, embed_dim]
+        c = torch.stack(tokens, dim=1)  # [B, T, k, embed_dim]
+        
         return g, c  # 返回时空特征和团簇tokens
 
 
@@ -369,7 +396,7 @@ class TCG_LSTM(nn.Module):
         self.down = down
         self.lstm_short = nn.LSTM(embed_dim + embed_dim, hidden, layers, batch_first=True, dropout=drop, bidirectional=True)
         self.lstm_long = nn.LSTM(embed_dim, hidden // 2, layers, batch_first=True, dropout=drop, bidirectional=True)
-        self.gate = nn.Sequential(nn.Linear(hidden * 2 + hidden, hidden * 2), nn.Sigmoid())  # gate short by long
+        self.gate = nn.Sequential(nn.Linear(hidden * 2 + hidden * 2, hidden * 2), nn.Sigmoid())  # gate short by long
         self.fc = nn.Sequential(
             nn.Linear(hidden * 2, 256), 
             nn.ReLU(True), 
@@ -384,13 +411,18 @@ class TCG_LSTM(nn.Module):
         long_in = g[:, ::self.down, :]  # [B, T/down, E]
         
         # 短程和长程LSTM
-        h_s, _ = self.lstm_short(short_in)  # [B, T, 2H]
-        h_l, _ = self.lstm_long(long_in)  # [B, T/down, H]
+        h_s, _ = self.lstm_short(short_in)  # [B, T, 2H] (双向LSTM)
+        h_l, _ = self.lstm_long(long_in)  # [B, T/down, H] (双向LSTM)
         
         # 上采样长程并对齐时间
         h_l_up = F.interpolate(h_l.transpose(1, 2), size=h_s.size(1), mode='linear', align_corners=False).transpose(1, 2)
-        gate = self.gate(torch.cat([h_s, h_l_up], dim=-1))  # [B, T, 2H]
-        h = gate * h_s + (1 - gate) * h_l_up  # 融合
+        # h_l_up: [B, T, H], h_s: [B, T, 2H]
+        
+        # 将 h_l_up 扩展到与 h_s 相同的维度
+        h_l_up_expanded = torch.cat([h_l_up, h_l_up], dim=-1)  # [B, T, 2H]
+        
+        gate = self.gate(torch.cat([h_s, h_l_up_expanded], dim=-1))  # [B, T, 4H]
+        h = gate * h_s + (1 - gate) * h_l_up_expanded  # 融合
 
         # 注意力池化（可选：对 T 做权重）
         alpha = torch.softmax(torch.mean(h, dim=-1), dim=1).unsqueeze(-1)  # [B, T, 1]

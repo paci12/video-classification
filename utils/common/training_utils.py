@@ -46,7 +46,7 @@ def get_torch_generator(seed: int) -> torch.Generator:
     g.manual_seed(seed)
     return g
 
-def train_epoch(model, train_loader, criterion, optimizer, device, epoch, use_amp: bool = False, scaler: Optional["GradScaler"] = None):
+def train_epoch(model, train_loader, criterion, optimizer, device, epoch, use_amp: bool = False, scaler: Optional["GradScaler"] = None, logger=None):
     """
     训练一个epoch
     
@@ -96,13 +96,19 @@ def train_epoch(model, train_loader, criterion, optimizer, device, epoch, use_am
             'Loss': f'{loss.item():.4f}',
             'Acc': f'{100.*correct/total:.2f}%'
         })
+        
+        # 每100个batch记录一次日志
+        if logger and (batch_idx + 1) % 100 == 0:
+            current_loss = loss.item()
+            current_acc = 100. * correct / total
+            logger.info(f"Epoch {epoch} - Batch {batch_idx + 1}/{len(train_loader)} - Loss: {current_loss:.4f}, Acc: {current_acc:.2f}%")
     
     avg_loss = total_loss / len(train_loader)
     accuracy = 100. * correct / total
     
     return avg_loss, accuracy
 
-def validate_epoch(model, val_loader, criterion, device, epoch, use_amp: bool = False):
+def validate_epoch(model, val_loader, criterion, device, epoch, use_amp: bool = False, logger=None):
     """
     验证一个epoch
     
@@ -144,6 +150,12 @@ def validate_epoch(model, val_loader, criterion, device, epoch, use_amp: bool = 
                 'Loss': f'{loss.item():.4f}',
                 'Acc': f'{100.*correct/total:.2f}%'
             })
+            
+            # 每50个batch记录一次验证日志
+            if logger and (batch_idx + 1) % 50 == 0:
+                current_loss = loss.item()
+                current_acc = 100. * correct / total
+                logger.info(f"Epoch {epoch} - Val Batch {batch_idx + 1}/{len(val_loader)} - Loss: {current_loss:.4f}, Acc: {current_acc:.2f}%")
     
     avg_loss = total_loss / len(val_loader)
     accuracy = 100. * correct / total

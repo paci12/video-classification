@@ -17,6 +17,8 @@ import pickle
 import glob
 from sklearn.preprocessing import LabelEncoder
 import torch.utils.data as data
+import logging
+from datetime import datetime
 
 # 添加utils路径
 sys.path.append('utils')
@@ -29,6 +31,35 @@ from utils.common.training_utils import (
     train_epoch, validate_epoch, save_checkpoint, load_checkpoint,
     get_optimizer, get_scheduler, save_predictions, count_parameters
 )
+
+def setup_logging(log_dir, model_name):
+    """设置日志记录"""
+    # 处理相对路径和绝对路径
+    if not os.path.isabs(log_dir):
+        # 如果是相对路径，相对于项目根目录
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        log_dir = os.path.join(project_root, log_dir)
+    
+    # 创建日志目录
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 创建日志文件名（包含时间戳）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"{model_name}_training_{timestamp}.log")
+    
+    # 配置日志格式
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)  # 同时输出到控制台
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized. Log file: {log_file}")
+    return logger
 from utils.config_loader import ConfigLoader
 import torchvision.transforms as transforms
 
@@ -286,7 +317,8 @@ def create_model(model_name, config):
                 self.decoder = decoder_module
 
             def forward(self, x):
-                return self.decoder(self.encoder(x))
+                g, c = self.encoder(x)  # 获取全局特征和团簇tokens
+                return self.decoder(g, c)  # 传递两个参数给TCG_LSTM
 
         return SwinTCGModel(encoder, decoder)
     
@@ -458,36 +490,40 @@ def get_data_loader(model_name, config, split='train'):
 
 def train_model(model_name, config, args):
     """训练模型"""
-    print(f"Starting training for {model_name}...")
+    # 设置日志记录
+    log_dir = config.get_logging_config().get('log_dir', f'results/{model_name}/result/outputs/logs')
+    logger = setup_logging(log_dir, model_name)
+    
+    logger.info(f"Starting training for {model_name}...")
     
     # 设备设置
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
     
     # 创建模型
-    print("Creating model...")
+    logger.info("Creating model...")
     try:
         model = create_model(model_name, config)
-        print("Model created successfully")
+        logger.info("Model created successfully")
         model = model.to(device)
-        print("Model moved to device")
+        logger.info("Model moved to device")
         
         # 多GPU支持
         if torch.cuda.device_count() > 1:
-            print(f"Using {torch.cuda.device_count()} GPUs!")
+            logger.info(f"Using {torch.cuda.device_count()} GPUs!")
             model = nn.DataParallel(model)
-            print("DataParallel applied")
+            logger.info("DataParallel applied")
         
-        print(f"Model parameters: {count_parameters(model):,}")
+        logger.info(f"Model parameters: {count_parameters(model):,}")
         
         # 打印模型结构
-        print("\nModel structure:")
-        print("="*40)
-        print(model)
-        print("="*40)
+        logger.info("\nModel structure:")
+        logger.info("="*40)
+        logger.info(str(model))
+        logger.info("="*40)
         
     except Exception as e:
-        print(f"Error creating model: {e}")
+        logger.error(f"Error creating model: {e}")
         import traceback
         traceback.print_exc()
         return
@@ -515,21 +551,21 @@ def train_model(model_name, config, args):
     criterion = nn.CrossEntropyLoss()
     
     # 获取数据加载器
-    print("Creating data loaders...")
+    logger.info("Creating data loaders...")
     try:
-        print("Creating train loader...")
+        logger.info("Creating train loader...")
         train_loader = get_data_loader(model_name, config, 'train')
-        print(f"Train loader created: {train_loader is not None}")
+        logger.info(f"Train loader created: {train_loader is not None}")
         
-        print("Creating val loader...")
+        logger.info("Creating val loader...")
         val_loader = get_data_loader(model_name, config, 'val')
-        print(f"Val loader created: {val_loader is not None}")
+        logger.info(f"Val loader created: {val_loader is not None}")
         
         if train_loader is None or val_loader is None:
-            print("Error: Data loading not implemented. Please use the individual model scripts.")
+            logger.error("Error: Data loading not implemented. Please use the individual model scripts.")
             return
     except Exception as e:
-        print(f"Error creating data loaders: {e}")
+        logger.error(f"Error creating data loaders: {e}")
         import traceback
         traceback.print_exc()
         return
@@ -545,20 +581,20 @@ def train_model(model_name, config, args):
     epoch_test_scores = []
     
     for epoch in range(epochs):
-        print(f"\nEpoch {epoch+1}/{epochs}")
+        logger.info(f"\nEpoch {epoch+1}/{epochs}")
         
         # 训练
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device, epoch+1
+            model, train_loader, criterion, optimizer, device, epoch+1, logger=logger
         )
         
         # 验证
         val_loss, val_acc = validate_epoch(
-            model, val_loader, criterion, device, epoch+1
+            model, val_loader, criterion, device, epoch+1, logger=logger
         )
         
-        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-        print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+        logger.info(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+        logger.info(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         
         # 保存训练历史
         epoch_train_losses.append(train_loss)
@@ -662,7 +698,7 @@ def train_model(model_name, config, args):
         
         scheduler.step()
     
-    print("Training completed!")
+    logger.info("Training completed!")
     
     # 保存训练历史到 outputs 目录
     base_dir = checkpoint_config.get('save_dir', f'results/{model_name}')

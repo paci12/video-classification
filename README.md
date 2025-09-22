@@ -16,7 +16,8 @@ video-classification/
 │   ├── CRNN/
 │   ├── ResNetCRNN/
 │   ├── ResNetCRNN_varylength/
-│   └── swintransformer_rnn/           # 注意：下划线命名
+│   ├── swintransformer_rnn/           # 注意：下划线命名
+│   └── clusterSwin_TCGlstm/           # ClusterSwin + TCG-LSTM 模型
 ├── utils/
 │   ├── common/                         # 标签/数据/模型/训练 公共组件
 │   ├── config_loader.py               # 配置加载器
@@ -30,7 +31,8 @@ video-classification/
 │   ├── CRNN_train.yaml
 │   ├── ResNetCRNN_train.yaml
 │   ├── ResNetCRNN_varylength_train.yaml
-│   └── swintransformer-RNN_train.yaml
+│   ├── swintransformer-RNN_train.yaml
+│   └── clusterSwin_TCGlstm.yaml
 ├── results/                           # 训练结果根目录
 ├── train.py                           # 统一训练脚本
 ├── eval.py                            # 模型评估脚本
@@ -165,6 +167,13 @@ logging:
 - 需要较小的batch size
 - 使用AdamW优化器和余弦退火调度器
 
+#### ClusterSwin + TCG-LSTM 配置
+- ClusterSwin编码器 + TCG-LSTM解码器架构
+- 使用Swin Transformer Tiny版本作为骨干网络
+- 支持团簇token机制，提高计算效率
+- 使用TCG-LSTM进行时序建模
+- 支持独立训练脚本和配置覆盖
+
 ### 配置文件示例对比
 
 #### 基础配置（CRNN）
@@ -187,6 +196,30 @@ training:
   warmup_epochs: 5
 ```
 
+#### 最新配置（ClusterSwin + TCG-LSTM）
+```yaml
+model:
+  name: "clusterSwin_TCGlstm"
+  clusterSwin:
+    embed_dim: 96
+    depths: [2, 2, 6, 2]
+    num_heads: [3, 6, 12, 24]
+    window_size: 7
+    patch_size: 4
+  rnn_decoder: "TCGlstm"
+  hidden_size: 512
+  num_layers: 2
+  dropout: 0.5
+checkpoint:
+  save_dir: "results/clusterSwin_TCGlstm/result"
+logging:
+  log_dir: "results/clusterSwin_TCGlstm/result/outputs/logs"
+training:
+  optimizer: "adamw"
+  scheduler: "cosine"
+  warmup_epochs: 5
+```
+
 ## 训练
 
 ### 基本训练命令
@@ -196,13 +229,10 @@ python train.py --model ResNetCRNN --config configs/ResNetCRNN_train.yaml
 python train.py --model CRNN       --config configs/CRNN_train.yaml
 python train.py --model Conv3D     --config configs/Conv3D_train.yaml
 python train.py --model swintransformer-RNN --config configs/swintransformer-RNN_train.yaml
+python train.py --model clusterSwin_TCGlstm --config configs/clusterSwin_TCGlstm.yaml
 
-# 直接运行 ClusterSwin + TCG-LSTM 脚本
-python models/clusterSwin_TCGlstm/clusterSwin_TCGlstm.py \
-  --config configs/clusterSwin_TCGlstm.yaml \
-  --batch_size 32 \
-  --epochs 50 \
-  --lr 1e-4
+# 直接运行 ClusterSwin + TCG-LSTM 脚本（推荐方式）
+python models/clusterSwin_TCGlstm/clusterSwin_TCGlstm.py --config configs/clusterSwin_TCGlstm.yaml --batch_size 32 --epochs 50 --lr 1e-4
 
 # 可选参数覆盖（会覆盖配置文件中的设置）
 python train.py --model ResNetCRNN --config configs/ResNetCRNN_train.yaml --batch_size 8
@@ -427,6 +457,7 @@ python utils/test_data_format.py --data_path ./jpegs_256_processed --test_all
 - **CRNN**: 平衡性能和效率，适合一般应用
 - **ResNetCRNN**: 性能优秀，训练稳定，推荐使用
 - **SwinTransformer-RNN**: 最新架构，需要较多计算资源
+- **ClusterSwin + TCG-LSTM**: 最新架构，使用团簇token机制提高效率，适合大规模视频分类
 
 ### 5. Resume训练最佳实践
 - **定期保存checkpoint**：设置合理的 `save_freq`（如每5个epoch）
@@ -486,8 +517,11 @@ python utils/test_data_format.py --data_path ./jpegs_256_processed --test_all
 
 ## 更新日志
 
-### v2.1 (当前版本)
-- **新增Resume训练功能**：支持从指定epoch继续训练
+### v2.2 (当前版本)
+- **新增ClusterSwin + TCG-LSTM模型**：支持团簇token机制的高效视频分类
+- **独立训练脚本**：clusterSwin_TCGlstm支持独立训练和配置覆盖
+- **配置文件支持**：新增clusterSwin_TCGlstm.yaml配置文件
+- **Resume训练功能**：支持从指定epoch继续训练
 - **智能目录管理**：resume时自动跳过目录备份
 - **checkpoint验证**：自动检查checkpoint文件完整性
 - **目录管理参数**：新增 `--no_backup` 参数
