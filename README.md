@@ -221,7 +221,7 @@ training:
 ```
 
 ## 训练
-
+ nohup python train.py --model clusterSwin_TCGlstm --config configs/clusterSwin_TCGlstm.yaml --epochs 50 --batch_size 8 > nohup.out 2>&1 &
 ### 基本训练命令
 ```bash
 # 使用配置文件训练

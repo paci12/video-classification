@@ -447,7 +447,7 @@ def get_data_loader(model_name, config, split='train'):
         le.fit(action_names)
         all_y_list = labels2cat(le, all_video_labels)
         
-        # 数据分割
+        # 数据分割 - 修复：确保训练和验证集不重叠
         from sklearn.model_selection import train_test_split
         X = np.array(all_video_folders)
         y = np.array(all_y_list)
@@ -456,10 +456,13 @@ def get_data_loader(model_name, config, split='train'):
         val_split = data_config.get('val_split', 0.2)
         train_split = data_config.get('train_split', 0.8)
         
+        # 一次性分割，然后根据split参数选择
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=val_split, random_state=42, stratify=y)
+        
         if split == 'train':
-            X_data, _, y_data, _ = train_test_split(X, y, test_size=val_split, random_state=42, stratify=y)
+            X_data, y_data = X_train, y_train
         else:  # val
-            _, X_data, _, y_data = train_test_split(X, y, test_size=val_split, random_state=42, stratify=y)
+            X_data, y_data = X_val, y_val
         
         # 创建数据集
         dataset = DatasetClass(data_path, X_data, y_data, frames, transform=transform)

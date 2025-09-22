@@ -44,8 +44,8 @@ data:
   
 augmentation:
   horizontal_flip: true
-  random_crop: true
-  color_jitter: true
+  random_crop: false
+  color_jitter: false
   normalize:
     mean: [0.485, 0.456, 0.406]
     std: [0.229, 0.224, 0.225]

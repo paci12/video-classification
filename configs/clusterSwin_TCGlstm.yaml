@@ -10,7 +10,7 @@ model:
   rnn_decoder: "TCGlstm"
   hidden_size: 512
   num_layers: 2
-  dropout: 0.5
+  dropout: 0.1  # 降低dropout，避免过度正则化
 
 training:
   epochs: 50
@@ -45,10 +45,10 @@ data:
   
 augmentation:
   horizontal_flip: true
-  random_crop: true
-  color_jitter: true
-  mixup: true
-  cutmix: true
+  random_crop: false  # 暂时关闭随机裁剪，避免过度增强
+  color_jitter: false  # 暂时关闭颜色抖动，避免过度增强
+  mixup: false  # 暂时关闭mixup
+  cutmix: false  # 暂时关闭cutmix
   normalize:
     mean: [0.485, 0.456, 0.406]
     std: [0.229, 0.224, 0.225]
