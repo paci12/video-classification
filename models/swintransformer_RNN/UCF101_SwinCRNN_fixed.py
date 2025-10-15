@@ -12,6 +12,9 @@ from datetime import datetime
 from utils.common.model_components import SwinTransformerEncoder, DecoderRNN
 from utils.common.data_loaders import Dataset_SwinCRNN
 from utils.common.label_utils import labels2cat
+from density_proxy_generation import DensityProxyGenerator
+from image_density_fusion import create_image_density_fusion
+from velocity_proxy_generation import VelocityProxyGenerator
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score
@@ -83,6 +86,34 @@ class Config:
         self.end_frame = 28
         self.skip_frame = 1
         
+        # Density Proxy Generation Module settings
+        self.use_density_proxy = False  # 是否使用密度代理特征
+        self.density_config = {
+            'input_size': 224,
+            'density_map_size': 32,
+            'gaussian_kernel_size': 5,
+            'gaussian_sigma': 1.0,
+            'contrast_alpha': 1.5,
+            'contrast_beta': 30
+        }
+        
+        # Velocity Proxy Generation Module settings
+        self.use_velocity_proxy = False  # 是否使用速度代理特征
+        self.velocity_config = {
+            'input_size': 224,
+            'velocity_map_size': 32,
+            'flow_method': 'farneback',
+            'flow_params': {
+                'pyr_scale': 0.5,
+                'levels': 3,
+                'winsize': 15,
+                'iterations': 3,
+                'poly_n': 5,
+                'poly_sigma': 1.2,
+                'flags': 0
+            }
+        }
+        
         # 如果提供了配置文件，则加载配置
         if config_dict:
             self._update_from_config(config_dict)
@@ -117,6 +148,20 @@ class Config:
             logging_cfg = config_dict['logging']
             self.log_dir = str(logging_cfg.get('log_dir', self.log_dir))
         
+        # 密度代理配置
+        if 'density_proxy' in config_dict:
+            density_cfg = config_dict['density_proxy']
+            self.use_density_proxy = bool(density_cfg.get('use_density_proxy', self.use_density_proxy))
+            if 'density_config' in density_cfg:
+                self.density_config.update(density_cfg['density_config'])
+        
+        # 速度代理配置
+        if 'velocity_proxy' in config_dict:
+            velocity_cfg = config_dict['velocity_proxy']
+            self.use_velocity_proxy = bool(velocity_cfg.get('use_velocity_proxy', self.use_velocity_proxy))
+            if 'velocity_config' in velocity_cfg:
+                self.velocity_config.update(velocity_cfg['velocity_config'])
+        
         # 验证必要的配置是否存在
         if self.data_path is None:
             raise ValueError("data_path is required in configuration")
@@ -133,6 +178,47 @@ def train_epoch(model, device, train_loader, optimizer, epoch, config):
     swin_encoder.train()
     rnn_decoder.train()
 
+    # 初始化特征生成器和融合模块
+    density_generator = None
+    density_fusion_module = None
+    velocity_generator = None
+    
+    # 创建密度代理生成器和融合模块（如果启用）
+    if config.use_density_proxy:
+        # 创建密度代理生成器
+        density_generator = DensityProxyGenerator(
+            input_size=config.res_size,
+            density_map_size=config.density_config.get('density_map_size', 32),
+            gaussian_kernel_size=config.density_config.get('gaussian_kernel_size', 5),
+            gaussian_sigma=config.density_config.get('gaussian_sigma', 1.0),
+            contrast_alpha=config.density_config.get('contrast_alpha', 1.5),
+            contrast_beta=config.density_config.get('contrast_beta', 30)
+        )
+        
+        # 创建图像密度融合模块
+        density_fusion_module = create_image_density_fusion(
+            input_channels=3,
+            density_channels=1,
+            feature_channels=64,
+            output_channels=512
+        ).to(device)
+        
+        # 将融合模块添加到优化器中
+        optimizer.add_param_group({
+            'params': density_fusion_module.parameters(),
+            'lr': config.learning_rate
+        })
+    
+    # 创建速度代理生成器（如果启用）
+    if config.use_velocity_proxy:
+        # 创建速度代理生成器
+        velocity_generator = VelocityProxyGenerator(
+            input_size=config.res_size,
+            velocity_map_size=config.velocity_config.get('velocity_map_size', 32),
+            flow_method=config.velocity_config.get('flow_method', 'farneback'),
+            flow_params=config.velocity_config.get('flow_params', None)
+        )
+
     losses = []
     scores = []
     
@@ -142,7 +228,48 @@ def train_epoch(model, device, train_loader, optimizer, epoch, config):
         X, y = X.to(device), y.to(device).view(-1, )
 
         optimizer.zero_grad()
-        output = rnn_decoder(swin_encoder(X))
+        
+        # 通过SwinTransformer编码器处理原始图像
+        swin_features = swin_encoder(X)  # [B, T, embed_dim]
+        
+        # 初始化特征列表
+        feature_list = [swin_features]
+        
+        # 处理密度特征（如果启用）
+        if config.use_density_proxy and density_generator is not None and density_fusion_module is not None:
+            # 批量生成密度通道
+            density_channels = density_generator.process_batch_frames(X)  # [B, T, 1, H, W]
+            
+            # 批量融合处理
+            fused_features = density_fusion_module.forward_batch(X, density_channels)  # [B, T, 512]
+            
+            # 添加到特征列表
+            feature_list.append(fused_features)
+        
+        # 处理速度特征（如果启用）
+        if config.use_velocity_proxy and velocity_generator is not None:
+            # 批量生成速度通道
+            velocity_channels = velocity_generator.process_batch_frames(X)  # [B, T-1, 1, H, W]
+            
+            # 调整速度通道的时间维度以匹配其他特征
+            if velocity_channels.shape[1] < X.shape[1]:
+                # 在时间维度上填充，使用最后一帧的速度特征
+                last_velocity = velocity_channels[:, -1:, :, :, :]  # [B, 1, 1, H, W]
+                velocity_channels = torch.cat([velocity_channels, last_velocity], dim=1)  # [B, T, 1, H, W]
+            
+            # 将速度通道展平为特征向量
+            velocity_features = velocity_channels.view(velocity_channels.shape[0], velocity_channels.shape[1], -1)  # [B, T, H*W]
+            
+            # 添加到特征列表
+            feature_list.append(velocity_features)
+        
+        # 拼接所有特征
+        if len(feature_list) > 1:
+            combined_features = torch.cat(feature_list, dim=-1)
+            output = rnn_decoder(combined_features)
+        else:
+            # 仅使用SwinTransformer特征
+            output = rnn_decoder(swin_features)
 
         loss = F.cross_entropy(output, y)
         losses.append(loss.item())
@@ -183,7 +310,73 @@ def validate_epoch(model, device, val_loader, epoch, config, logger=None):
         for X, y in pbar:
             X, y = X.to(device), y.to(device).view(-1, )
 
-            output = rnn_decoder(swin_encoder(X))
+            # 通过SwinTransformer编码器处理原始图像
+            swin_features = swin_encoder(X)  # [B, T, embed_dim]
+            
+            # 初始化特征列表
+            feature_list = [swin_features]
+            
+            # 处理密度特征（如果启用）
+            if config.use_density_proxy:
+                # 创建密度代理生成器
+                density_generator = DensityProxyGenerator(
+                    input_size=config.res_size,
+                    density_map_size=config.density_config.get('density_map_size', 32),
+                    gaussian_kernel_size=config.density_config.get('gaussian_kernel_size', 5),
+                    gaussian_sigma=config.density_config.get('gaussian_sigma', 1.0),
+                    contrast_alpha=config.density_config.get('contrast_alpha', 1.5),
+                    contrast_beta=config.density_config.get('contrast_beta', 30)
+                )
+                
+                # 创建图像密度融合模块
+                density_fusion_module = create_image_density_fusion(
+                    input_channels=3,
+                    density_channels=1,
+                    feature_channels=64,
+                    output_channels=512
+                ).to(device)
+                
+                # 批量生成密度通道
+                density_channels = density_generator.process_batch_frames(X)  # [B, T, 1, H, W]
+                
+                # 批量融合处理
+                fused_features = density_fusion_module.forward_batch(X, density_channels)  # [B, T, 512]
+                
+                # 添加到特征列表
+                feature_list.append(fused_features)
+            
+            # 处理速度特征（如果启用）
+            if config.use_velocity_proxy:
+                # 创建速度代理生成器
+                velocity_generator = VelocityProxyGenerator(
+                    input_size=config.res_size,
+                    velocity_map_size=config.velocity_config.get('velocity_map_size', 32),
+                    flow_method=config.velocity_config.get('flow_method', 'farneback'),
+                    flow_params=config.velocity_config.get('flow_params', None)
+                )
+                
+                # 批量生成速度通道
+                velocity_channels = velocity_generator.process_batch_frames(X)  # [B, T-1, 1, H, W]
+                
+                # 调整速度通道的时间维度以匹配其他特征
+                if velocity_channels.shape[1] < X.shape[1]:
+                    # 在时间维度上填充，使用最后一帧的速度特征
+                    last_velocity = velocity_channels[:, -1:, :, :, :]  # [B, 1, 1, H, W]
+                    velocity_channels = torch.cat([velocity_channels, last_velocity], dim=1)  # [B, T, 1, H, W]
+                
+                # 将速度通道展平为特征向量
+                velocity_features = velocity_channels.view(velocity_channels.shape[0], velocity_channels.shape[1], -1)  # [B, T, H*W]
+                
+                # 添加到特征列表
+                feature_list.append(velocity_features)
+            
+            # 拼接所有特征
+            if len(feature_list) > 1:
+                combined_features = torch.cat(feature_list, dim=-1)
+                output = rnn_decoder(combined_features)
+            else:
+                # 仅使用SwinTransformer特征
+                output = rnn_decoder(swin_features)
             loss = F.cross_entropy(output, y, reduction='sum')
             val_loss += loss.item()
             

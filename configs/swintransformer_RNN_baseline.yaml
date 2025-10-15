@@ -1,0 +1,48 @@
+# SwinTransformer-RNN Baseline (No Additional Features)
+# 基线模型：仅使用SwinTransformer特征
+
+# 数据配置
+data:
+  data_path: "/path/to/your/dataset"
+  action_name_path: "/path/to/action_names.txt"
+  num_classes: 101
+  frame_size: 224
+
+# 训练配置
+training:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.001
+
+# 检查点配置
+checkpoint:
+  save_dir: "/path/to/save/models"
+  pretrained: true
+
+# 日志配置
+logging:
+  log_dir: "/path/to/logs"
+
+# 密度代理生成模块配置
+density_proxy:
+  use_density_proxy: false  # 禁用密度特征
+
+# 速度代理生成模块配置
+velocity_proxy:
+  use_velocity_proxy: false  # 禁用速度特征
+
+# 模型架构配置
+model:
+  CNN_fc_hidden1: 1024
+  CNN_fc_hidden2: 768
+  CNN_embed_dim: 512
+  dropout_p: 0.0
+  use_pretrained: true
+  RNN_hidden_layers: 3
+  RNN_hidden_nodes: 512
+  RNN_FC_dim: 256
+  k: 101
+  log_interval: 10
+  begin_frame: 1
+  end_frame: 28
+  skip_frame: 1

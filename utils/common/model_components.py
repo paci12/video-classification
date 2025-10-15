@@ -320,6 +320,91 @@ class OffsetHead(nn.Module):
         return o.tanh()  # 归一化到 [-1,1]，再按特征尺寸缩放
 
 
+class ClusterSwinEncoder1(nn.Module):
+    def __init__(self, backbone='swin_tiny_patch4_window7_224', embed_dim=512, k_tokens=8):
+        super().__init__()
+        # 创建Swin Transformer模型，使用num_classes=0只返回特征
+        self.backbone = create_model(backbone, pretrained=True, num_classes=0)
+        
+        # 获取Swin Transformer的特征维度
+        self.embed_dim = embed_dim
+        self.k_tokens = k_tokens
+        
+        # 获取backbone的特征维度
+        with torch.no_grad():
+            dummy_input = torch.randn(1, 3, 224, 224)
+            features = self.backbone(dummy_input)
+            self.feature_dim = features.shape[1]  # 通常是768 for Swin-T
+        
+        # 创建特征投影层
+        self.proj = nn.Linear(self.feature_dim, embed_dim)
+        
+        # 创建团簇token池化层
+        self.token_pool = nn.AdaptiveAvgPool2d(1)
+        
+    def _cluster_tokens(self, features, k_tokens=None):
+        """从特征中提取团簇tokens"""
+        if k_tokens is None:
+            k_tokens = self.k_tokens
+            
+        B, N, C = features.shape  # [B, N, C] where N is number of patches
+        
+        # 计算每个patch的重要性分数
+        importance = features.norm(dim=-1)  # [B, N]
+        
+        # 选择top-k个最重要的tokens
+        k = min(k_tokens, N)
+        _, topk_indices = torch.topk(importance, k, dim=1)  # [B, k]
+        
+        # 提取团簇tokens
+        cluster_tokens = []
+        for b in range(B):
+            selected_tokens = features[b, topk_indices[b]]  # [k, C]
+            cluster_tokens.append(selected_tokens)
+        
+        return torch.stack(cluster_tokens, 0)  # [B, k, C]
+
+    def forward(self, x):
+        B, T, C, H, W = x.shape
+        feats, tokens = [], []
+        
+        for t in range(T):
+            # 通过Swin Transformer提取全局特征
+            # 输入: [B, 3, H, W]
+            # 输出: [B, feature_dim] (全局特征)
+            global_features = self.backbone(x[:, t])  # [B, feature_dim]
+            
+            # 投影到目标维度
+            global_feat = self.proj(global_features)  # [B, embed_dim]
+            feats.append(global_feat)
+            
+            # 为了使用_cluster_tokens方法，我们需要创建patch tokens
+            # 从全局特征中生成多个patch tokens来模拟patch-level特征
+            # 使用不同的变换来创建多样化的tokens
+            patch_tokens = []
+            for i in range(49):  # 7x7 patches for 224x224 input
+                # 使用不同的线性变换来创建多样化的tokens
+                if not hasattr(self, f'patch_proj_{i}'):
+                    setattr(self, f'patch_proj_{i}', nn.Linear(self.feature_dim, self.embed_dim).to(global_features.device))
+                
+                # 对全局特征进行轻微变换
+                transformed_feat = getattr(self, f'patch_proj_{i}')(global_features)  # [B, embed_dim]
+                patch_tokens.append(transformed_feat)
+            
+            # 堆叠成patch tokens格式 [B, N, C]
+            patch_tokens = torch.stack(patch_tokens, dim=1)  # [B, 49, embed_dim]
+            
+            # 使用_cluster_tokens方法提取团簇tokens
+            cluster_tokens = self._cluster_tokens(patch_tokens)  # [B, k, embed_dim]
+            tokens.append(cluster_tokens)
+        
+        # 堆叠时序特征
+        g = torch.stack(feats, dim=1)  # [B, T, embed_dim]
+        c = torch.stack(tokens, dim=1)  # [B, T, k, embed_dim]
+        
+        return g, c  # 返回时空特征和团簇tokens
+
+
 class ClusterSwinEncoder(nn.Module):
     def __init__(self, backbone='swin_tiny_patch4_window7_224', embed_dim=512, k_tokens=8):
         super().__init__()

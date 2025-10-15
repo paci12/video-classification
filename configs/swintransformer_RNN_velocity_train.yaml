@@ -1,0 +1,74 @@
+# SwinTransformer-RNN with Velocity Proxy Features Training Configuration
+# 使用速度代理特征的SwinTransformer-RNN训练配置
+
+# 数据配置
+data:
+  data_path: "/path/to/your/dataset"  # 数据集路径
+  action_name_path: "/path/to/action_names.txt"  # 动作名称文件路径
+  num_classes: 101  # 类别数量
+  frame_size: 224  # 帧尺寸
+
+# 训练配置
+training:
+  epochs: 50  # 训练轮数
+  batch_size: 32  # 批次大小
+  learning_rate: 0.001  # 学习率
+
+# 检查点配置
+checkpoint:
+  save_dir: "/path/to/save/models"  # 模型保存路径
+  pretrained: true  # 是否使用预训练权重
+
+# 日志配置
+logging:
+  log_dir: "/path/to/logs"  # 日志保存路径
+
+# 密度代理生成模块配置
+density_proxy:
+  use_density_proxy: true  # 是否使用密度代理特征
+  density_config:
+    input_size: 224  # 输入图像尺寸
+    density_map_size: 32  # 密度图尺寸
+    gaussian_kernel_size: 5  # 高斯核大小
+    gaussian_sigma: 1.0  # 高斯标准差
+    contrast_alpha: 1.5  # 对比度增强参数
+    contrast_beta: 30  # 对比度增强偏移
+
+# 速度代理生成模块配置
+velocity_proxy:
+  use_velocity_proxy: true  # 是否使用速度代理特征
+  velocity_config:
+    input_size: 224  # 输入图像尺寸
+    velocity_map_size: 32  # 速度图尺寸
+    flow_method: "farneback"  # 光流估计方法 ('farneback', 'lucas_kanade')
+    flow_params:  # 光流参数
+      pyr_scale: 0.5  # 金字塔缩放因子
+      levels: 3  # 金字塔层数
+      winsize: 15  # 窗口大小
+      iterations: 3  # 迭代次数
+      poly_n: 5  # 多项式展开项数
+      poly_sigma: 1.2  # 多项式标准差
+      flags: 0  # 标志位
+
+# 模型架构配置
+model:
+  # SwinTransformer配置
+  CNN_fc_hidden1: 1024
+  CNN_fc_hidden2: 768
+  CNN_embed_dim: 512
+  dropout_p: 0.0
+  use_pretrained: true
+  
+  # RNN解码器配置
+  RNN_hidden_layers: 3
+  RNN_hidden_nodes: 512
+  RNN_FC_dim: 256
+  
+  # 训练参数
+  k: 101  # 类别数
+  log_interval: 10  # 日志间隔
+  
+  # 视频帧配置
+  begin_frame: 1  # 开始帧
+  end_frame: 28  # 结束帧
+  skip_frame: 1  # 跳帧数
